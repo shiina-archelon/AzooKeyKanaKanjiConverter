@@ -438,6 +438,27 @@ public final class KanaKanjiConverter {
         }
     }
 
+    /// 入力の先頭が決まっている候補を設定する関数
+    /// 以降の変換と予測は、この候補の表記で始まるものだけになる。読みが入力の先頭から消えると外れる。
+    /// - Parameters:
+    ///   - candidate: 先頭の候補。クライアントが受け入れた予測候補 (`ConversionResult.predictionResults`) を渡す。
+    /// - Note:
+    ///   先頭の制約は Zenzai の変換でだけ使われる。
+    public func setPrefixCandidate(_ candidate: Candidate) {
+        // 前のキー入力の予測は先頭を決める前の文脈のものなので捨てる
+        self.invalidateStablePredictionCandidateCache()
+        self.updateCurrentSessionState {
+            $0.zenzaiCache = $0.zenzaiCache?.settingPrefixCandidate(candidate)
+                ?? Kana2Kanji.ZenzaiCache(
+                    $0.previousInputData ?? ComposingText(),
+                    constraint: .init([]),
+                    satisfyingCandidate: candidate,
+                    evaluatedSatisfyingCandidate: candidate,
+                    prefixCandidate: candidate
+                )
+        }
+    }
+
     /// 確定操作後、学習メモリをアップデートする関数。
     /// - Parameters:
     ///   - candidate: 確定された候補。
@@ -619,7 +640,7 @@ public final class KanaKanjiConverter {
     ///   - sums: 変換対象のデータ。
     /// - Returns:
     ///   予測変換候補
-    private func getPredictionCandidate(_ bestCandidateDataForPrediction: consuming CandidateData, composingText: ComposingText, options: ConvertRequestOptions) -> [Candidate] {
+    private func getPredictionCandidate(_ bestCandidateDataForPrediction: consuming CandidateData, composingText: ComposingText, options: ConvertRequestOptions, prefixText: String? = nil) -> [Candidate] {
         // 予測変換は次の方針で行う。
         // prepart: 前半文節 lastPart: 最終文節とする。
         // まず、lastPartがnilであるところから始める
@@ -679,6 +700,10 @@ public final class KanaKanjiConverter {
             )
             print(fullClause.text, predictions)
             candidates.append(contentsOf: consume predictions)
+        }
+        // 辞書の予測は最後の文節を読みで引き直すため、先頭の表記を含まない候補が出る。それは除く
+        if let prefixText {
+            candidates.removeAll { !$0.text.hasPrefix(prefixText) }
         }
         if !candidates.isEmpty {
             return candidates
@@ -860,13 +885,19 @@ public final class KanaKanjiConverter {
             return ConversionResult(mainResults: candidates, predictionResults: [], englishPredictionResults: [], firstClauseResults: candidates)   // アーリーリターン
         }
 
+        // 先頭の候補の表記。予測候補もこの表記で始める
+        let prefixText = options.zenzaiMode.enabled ? self.currentSessionState.zenzaiCache?.prefixCandidate?.text : nil
         // 予測変換用のベスト候補
         var bestCandidateDataForPrediction: CandidateData?
         // 文章全体を変換した場合の候補上位5件を作る（不要なときはlazyで中間配列を避ける）
         let wholeSentenceUniqueCandidates: [Candidate]
         if options.requireJapanesePrediction.isEnabled {
             let clauseResultCandidates = clauseResult.map { self.converter.processClauseCandidate($0) }
-            bestCandidateDataForPrediction = zip(clauseResult, clauseResultCandidates).max {$0.1.value < $1.1.value}!.0
+            let candidatePairs = zip(clauseResult, clauseResultCandidates)
+            let prefixPairs = prefixText.map { text in candidatePairs.filter { $0.1.text.hasPrefix(text) } } ?? []
+            bestCandidateDataForPrediction = prefixPairs.isEmpty
+                ? candidatePairs.max {$0.1.value < $1.1.value}!.0
+                : prefixPairs.max {$0.1.value < $1.1.value}!.0
             wholeSentenceUniqueCandidates = self.getUniqueCandidate(clauseResultCandidates)
         } else {
             wholeSentenceUniqueCandidates = self.getUniqueCandidate(clauseResult.lazy.map { self.converter.processClauseCandidate($0) })
@@ -927,7 +958,7 @@ public final class KanaKanjiConverter {
             var stablePredictionCandidates: [Candidate] = []
             if options.requireJapanesePrediction.isEnabled, let bestCandidateDataForPrediction {
                 let candidates = self.getUniqueCandidate(
-                    self.getPredictionCandidate(bestCandidateDataForPrediction, composingText: inputData, options: options)
+                    self.getPredictionCandidate(bestCandidateDataForPrediction, composingText: inputData, options: options, prefixText: prefixText)
                 ).min(count: 3, sortedBy: {$0.value > $1.value})
                 stablePredictionCandidates = self.stablePredictionCandidates(
                     composingText: inputData,

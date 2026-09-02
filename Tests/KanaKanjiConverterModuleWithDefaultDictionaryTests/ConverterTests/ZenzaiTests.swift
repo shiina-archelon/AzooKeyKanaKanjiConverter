@@ -90,7 +90,7 @@ final class ZenzaiTests: XCTestCase {
         inferenceLimit: Int = Int.max,
         leftSideContext: String? = nil
     ) -> ConvertRequestOptions {
-        return .init(
+        .init(
             N_best: 10,
             requireJapanesePrediction: .disabled,
             requireEnglishPrediction: .disabled,
@@ -480,6 +480,52 @@ final class ZenzaiTests: XCTestCase {
                 )
             }
         }
+    }
+
+    func testPrefixCandidateConstrainsFollowingConversion() throws {
+        // 予測候補を受け入れたあと、その読みまで入力を伸ばして変換すると、
+        // 受け入れた候補の表記が第一候補になり、次の予測候補もその表記で始まる。
+        // 素の変換では `かみの` は `上の`、`ひだり` は `左` になる。
+        let dicdataStore = DicdataStore.withDefaultDictionary(preloadDictionary: true)
+        let options = self.desktopPredictiveInputOptions(leftSideContext: "")
+        struct TestCase {
+            var input: String
+            var acceptedRuby: String
+            var acceptedText: String
+        }
+        let testCases: [TestCase] = [
+            TestCase(input: "かみ", acceptedRuby: "かみの", acceptedText: "神の"),
+            TestCase(input: "ひだ", acceptedRuby: "ひだり", acceptedText: "←")
+        ]
+        for testCase in testCases {
+            let converter = KanaKanjiConverter(dicdataStore: dicdataStore)
+            var composingText = ComposingText()
+            composingText.insertAtCursorPosition(testCase.input, inputStyle: .direct)
+            let result = converter.requestCandidates(composingText, options: options)
+            // 受け入れる予測候補。`←` は `ひだ` の予測に出ないので、読み `ひだり` の変換候補から用意する
+            let accepted = try XCTUnwrap(
+                result.predictionResults.first { $0.text == testCase.acceptedText }
+                    ?? self.candidate(withText: testCase.acceptedText, ofRuby: testCase.acceptedRuby, dicdataStore: dicdataStore, options: options),
+                "\(testCase.acceptedText) が候補に無い"
+            )
+            converter.setPrefixCandidate(accepted)
+            composingText.insertAtCursorPosition(String(testCase.acceptedRuby.dropFirst(testCase.input.count)), inputStyle: .direct)
+            let next = converter.requestCandidates(composingText, options: options)
+            XCTAssertEqual(next.mainResults.first?.text, testCase.acceptedText, "\(testCase.input) → \(testCase.acceptedText)")
+            XCTAssertFalse(next.predictionResults.isEmpty, "\(testCase.acceptedText) の続きの予測が無い")
+            for prediction in next.predictionResults {
+                XCTAssertTrue(prediction.text.hasPrefix(testCase.acceptedText), "予測 \(prediction.text) が \(testCase.acceptedText) で始まらない")
+            }
+        }
+    }
+
+    private func candidate(withText text: String, ofRuby ruby: String, dicdataStore: DicdataStore, options: ConvertRequestOptions) -> Candidate? {
+        var composingText = ComposingText()
+        composingText.insertAtCursorPosition(ruby, inputStyle: .direct)
+        return KanaKanjiConverter(dicdataStore: dicdataStore)
+            .requestCandidates(composingText, options: options)
+            .mainResults
+            .first { $0.text == text }
     }
 
     @MainActor
