@@ -438,13 +438,40 @@ public final class KanaKanjiConverter {
         }
     }
 
-    /// 入力の先頭が決まっている候補を設定する関数
-    /// 以降の変換と予測は、この候補の表記で始まるものだけになる。読みが入力の先頭から消えると外れる。
+    /// 予測候補を未確定入力に受け入れる。
+    /// 候補の残りの読みを入力へ追加し、以降の変換と予測を受け入れた表記で始まるものに制約する。
     /// - Parameters:
-    ///   - candidate: 先頭の候補。クライアントが受け入れた予測候補 (`ConversionResult.predictionResults`) を渡す。
+    ///   - candidate: 受け入れる予測候補。`ConversionResult.predictionResults` の要素を渡す。
+    ///   - composingText: 候補を受け入れる未確定入力。
+    /// - Returns: 候補が現在の入力に適用でき、入力と制約を更新した場合は `true`。それ以外は `false`。
     /// - Note:
-    ///   先頭の制約は Zenzai の変換でだけ使われる。
-    public func setPrefixCandidate(_ candidate: Candidate) {
+    ///   この関数は候補の再計算を行わない。更新後の `composingText` を使って `requestCandidates(_:options:)` を呼び出すこと。
+    ///   受け入れた表記による先頭の制約は Zenzai の変換でだけ使われる。
+    @discardableResult
+    public func acceptPredictionCandidate(_ candidate: Candidate, composingText: inout ComposingText) -> Bool {
+        guard !composingText.isEmpty, composingText.isAtEndIndex else {
+            return false
+        }
+        let candidateRuby = candidate.data.map(\.ruby).joined().toHiragana()
+        guard !candidateRuby.isEmpty else {
+            return false
+        }
+        let inputStyle = composingText.input.last?.inputStyle ?? .direct
+        let source = self.converter.resolvePredictiveInputSource(
+            composingText: composingText,
+            inputStyle: inputStyle
+        )
+        let currentRuby = source.baseConvertTarget.toHiragana()
+        guard candidateRuby.hasPrefix(currentRuby), candidateRuby.count > currentRuby.count else {
+            return false
+        }
+        let remainingRuby = String(candidateRuby.dropFirst(currentRuby.count))
+
+        if source.droppedSuffixCount > 0 {
+            composingText.deleteBackwardFromCursorPosition(count: source.droppedSuffixCount)
+        }
+        composingText.insertAtCursorPosition(remainingRuby, inputStyle: .direct)
+
         // 前のキー入力の予測は先頭を決める前の文脈のものなので捨てる
         self.invalidateStablePredictionCandidateCache()
         self.updateCurrentSessionState {
@@ -457,6 +484,7 @@ public final class KanaKanjiConverter {
                     prefixCandidate: candidate
                 )
         }
+        return true
     }
 
     /// 確定操作後、学習メモリをアップデートする関数。

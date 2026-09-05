@@ -508,8 +508,8 @@ final class ZenzaiTests: XCTestCase {
                     ?? self.candidate(withText: testCase.acceptedText, ofRuby: testCase.acceptedRuby, dicdataStore: dicdataStore, options: options),
                 "\(testCase.acceptedText) が候補に無い"
             )
-            converter.setPrefixCandidate(accepted)
-            composingText.insertAtCursorPosition(String(testCase.acceptedRuby.dropFirst(testCase.input.count)), inputStyle: .direct)
+            XCTAssertTrue(converter.acceptPredictionCandidate(accepted, composingText: &composingText))
+            XCTAssertEqual(composingText.convertTarget, testCase.acceptedRuby)
             let next = converter.requestCandidates(composingText, options: options)
             XCTAssertEqual(next.mainResults.first?.text, testCase.acceptedText, "\(testCase.input) → \(testCase.acceptedText)")
             XCTAssertFalse(next.predictionResults.isEmpty, "\(testCase.acceptedText) の続きの予測が無い")
@@ -538,9 +538,11 @@ final class ZenzaiTests: XCTestCase {
                 )
             ]
         )
-        converter.setPrefixCandidate(accepted)
         var composingText = ComposingText()
-        composingText.insertAtCursorPosition("ひだり", inputStyle: .direct)
+        composingText.insertAtCursorPosition("ひだ", inputStyle: .direct)
+        _ = converter.requestCandidates(composingText, options: options)
+        XCTAssertTrue(converter.acceptPredictionCandidate(accepted, composingText: &composingText))
+        XCTAssertEqual(composingText.convertTarget, "ひだり")
 
         let result = converter.requestCandidates(composingText, options: options)
 
@@ -571,14 +573,15 @@ final class ZenzaiTests: XCTestCase {
         options.requireJapanesePrediction = .manualMix
         options.experimentalZenzaiPredictiveInput = false
         var composingText = ComposingText()
-        composingText.insertAtCursorPosition("きょう", inputStyle: .direct)
+        composingText.insertAtCursorPosition("きょ", inputStyle: .direct)
         let initialResult = converter.requestCandidates(composingText, options: options)
         let accepted = try XCTUnwrap(
             initialResult.predictionResults.first { $0.data.map(\.word).joined() == template }
         )
         XCTAssertTrue(initialResult.predictionResults.contains { $0.data.map(\.word).joined() == template + "は晴れ" })
 
-        converter.setPrefixCandidate(accepted)
+        XCTAssertTrue(converter.acceptPredictionCandidate(accepted, composingText: &composingText))
+        XCTAssertEqual(composingText.convertTarget, "きょう")
         let nextResult = converter.requestCandidates(composingText, options: options)
 
         XCTAssertFalse(nextResult.predictionResults.isEmpty)
