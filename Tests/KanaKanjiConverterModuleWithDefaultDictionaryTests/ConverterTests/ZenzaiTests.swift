@@ -519,6 +519,73 @@ final class ZenzaiTests: XCTestCase {
         }
     }
 
+    func testPrefixCandidateFiltersCandidatesMixedAfterZenzaiConversion() throws {
+        let dicdataStore = DicdataStore.withDefaultDictionary(preloadDictionary: true)
+        let options = self.requestOptions(inferenceLimit: 0)
+        let accepted = try XCTUnwrap(
+            self.candidate(withText: "←", ofRuby: "ひだり", dicdataStore: dicdataStore, options: options)
+        )
+        let converter = KanaKanjiConverter(dicdataStore: dicdataStore)
+        converter.importDynamicUserDictionary(
+            [],
+            shortcuts: [
+                .init(
+                    word: "左",
+                    ruby: "ヒダリ",
+                    cid: CIDData.一般名詞.cid,
+                    mid: MIDData.一般.mid,
+                    value: 0
+                )
+            ]
+        )
+        converter.setPrefixCandidate(accepted)
+        var composingText = ComposingText()
+        composingText.insertAtCursorPosition("ひだり", inputStyle: .direct)
+
+        let result = converter.requestCandidates(composingText, options: options)
+
+        XCTAssertEqual(result.mainResults.first?.text, "←")
+        XCTAssertTrue(result.mainResults.allSatisfy { $0.text.hasPrefix("←") })
+    }
+
+    func testPrefixCandidateUsesUnparsedTemplateTextForPredictions() throws {
+        let template = #"<date format="yyyy年MM月dd日" type="western" language="ja_JP" delta="0" deltaunit="1">"#
+        let converter = KanaKanjiConverter.withDefaultDictionary()
+        converter.importDynamicUserDictionary([
+            .init(
+                word: template,
+                ruby: "キョウ",
+                cid: CIDData.一般名詞.cid,
+                mid: MIDData.一般.mid,
+                value: 0
+            ),
+            .init(
+                word: template + "は晴れ",
+                ruby: "キョウハハレ",
+                cid: CIDData.一般名詞.cid,
+                mid: MIDData.一般.mid,
+                value: 0
+            )
+        ])
+        var options = self.requestOptions(inferenceLimit: 0)
+        options.requireJapanesePrediction = .manualMix
+        options.experimentalZenzaiPredictiveInput = false
+        var composingText = ComposingText()
+        composingText.insertAtCursorPosition("きょう", inputStyle: .direct)
+        let initialResult = converter.requestCandidates(composingText, options: options)
+        let accepted = try XCTUnwrap(
+            initialResult.predictionResults.first { $0.data.map(\.word).joined() == template }
+        )
+        XCTAssertTrue(initialResult.predictionResults.contains { $0.data.map(\.word).joined() == template + "は晴れ" })
+
+        converter.setPrefixCandidate(accepted)
+        let nextResult = converter.requestCandidates(composingText, options: options)
+
+        XCTAssertFalse(nextResult.predictionResults.isEmpty)
+        XCTAssertTrue(nextResult.predictionResults.allSatisfy { $0.text.hasPrefix(accepted.text) })
+        XCTAssertTrue(nextResult.predictionResults.contains { $0.text == accepted.text + "は晴れ" })
+    }
+
     private func candidate(withText text: String, ofRuby ruby: String, dicdataStore: DicdataStore, options: ConvertRequestOptions) -> Candidate? {
         var composingText = ComposingText()
         composingText.insertAtCursorPosition(ruby, inputStyle: .direct)

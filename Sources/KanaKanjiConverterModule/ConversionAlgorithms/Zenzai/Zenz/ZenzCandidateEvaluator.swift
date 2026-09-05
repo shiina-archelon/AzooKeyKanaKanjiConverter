@@ -446,15 +446,16 @@ struct ZenzCandidateEvaluator {
         }
     }
 
-    /// `data` の先頭から、表記が `byteCount` byte に達するまでの要素を落とす
-    private static func droppingFixedData(_ data: [DicdataElement], byteCount: Int) -> [DicdataElement] {
+    /// `data` の先頭から、表記全体が固定部分に収まる要素だけを落とす
+    static func droppingFixedData(_ data: [DicdataElement], byteCount: Int) -> [DicdataElement] {
         var coveredByteCount = 0
         return Array(
             data.drop { element in
-                guard coveredByteCount < byteCount else {
+                let nextCoveredByteCount = coveredByteCount + element.word.utf8.count
+                guard nextCoveredByteCount <= byteCount else {
                     return false
                 }
-                coveredByteCount += element.word.utf8.count
+                coveredByteCount = nextCoveredByteCount
                 return true
             }
         )
